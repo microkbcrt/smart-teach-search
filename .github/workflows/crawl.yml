@@ -1,0 +1,40 @@
+name: Crawl Forum and Deploy Search Index
+
+on:
+  schedule:
+    - cron: '0 2 * * *'    # 每天 UTC 2:00（北京时间 10:00）
+  workflow_dispatch:         # 允许手动触发
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run crawler
+        run: python crawler.py
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          publish_branch: gh-pages
+          keep_files: false
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Update search-index.json'
+          # 只部署必要文件，减小仓库体积
+          exclude_assets: '.github, crawler.py, progress.json, *.pyc, __pycache__'
