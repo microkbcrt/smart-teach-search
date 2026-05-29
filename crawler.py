@@ -6,6 +6,7 @@ import os
 import random
 from html import unescape
 from typing import List, Dict
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 BASE_URL = "https://forum.smart-teach.cn"
 HEADERS = {
@@ -14,12 +15,13 @@ HEADERS = {
 }
 PER_PAGE = 50
 MAX_RETRIES = 3
-RETRY_DELAY = 3
+RETRY_DELAY = 5  # 重试前等待秒数
 
 PROGRESS_FILE = "progress.json"
 OUTPUT_FILE = "search-index.json"
 
 def clean_html(html: str) -> str:
+    """去除HTML标签，转义实体，压缩空白"""
     if not html:
         return ""
     text = re.sub(r'<[^>]+>', ' ', html)
@@ -28,7 +30,6 @@ def clean_html(html: str) -> str:
     return text
 
 def load_progress() -> Dict[str, bool]:
-    """加载已抓取的话题ID集合"""
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
             return json.load(f)
@@ -49,6 +50,7 @@ def save_docs(docs: List[Dict]):
         json.dump(docs, f, ensure_ascii=False, indent=2)
 
 def fetch_with_retry(url: str, params: dict = None) -> dict:
+    """带重试机制的请求，遇到 Connection refused 则抛出异常终止翻页"""
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
@@ -60,15 +62,41 @@ def fetch_with_retry(url: str, params: dict = None) -> dict:
                 time.sleep(wait)
             else:
                 print(f"  非200状态码: {resp.status_code}")
+        except RequestsConnectionError as e:
+            print(f"  连接被拒绝 (Connection refused): {e}")
+            # 连接被拒绝通常是防火墙限流，直接终止翻页
+            raise StopIteration("Connection refused, stop pagination") from e
         except Exception as e:
             print(f"  请求异常: {e}")
         time.sleep(RETRY_DELAY)
     raise Exception(f"无法获取 {url}")
 
+def fetch_post_content(post_id: str) -> str:
+    """获取单个帖子的HTML内容"""
+    try:
+        post_resp = fetch_with_retry(f"{BASE_URL}/api/posts/{post_id}")
+        return post_resp["data"]["attributes"].get("contentHtml", "")
+    except Exception:
+        return ""
+
+def fetch_discussion_detail(topic_id: str) -> str:
+    """当话题缺少 relationships 时，单独请求话题详情，返回第一帖内容"""
+    try:
+        disc_resp = fetch_with_retry(f"{BASE_URL}/api/discussions/{topic_id}")
+        if "data" in disc_resp and "relationships" in disc_resp["data"]:
+            first_post_rel = disc_resp["data"]["relationships"]["firstPost"]["data"]
+            post_id = first_post_rel["id"]
+            return fetch_post_content(post_id)
+        else:
+            print(f"  话题详情仍无 relationships，跳过内容")
+            return ""
+    except Exception as e:
+        print(f"  单独获取话题详情失败 {topic_id}: {e}")
+        return ""
+
 def crawl_all():
     progress = load_progress()
     existing_docs = load_existing_docs()
-    # 将现有文档转为 id -> doc 映射，便于合并
     doc_map = {doc["id"]: doc for doc in existing_docs}
     new_count = 0
     page = 1
@@ -84,6 +112,9 @@ def crawl_all():
                     "include": "firstPost"
                 }
             )
+        except StopIteration:
+            print("因连接被拒绝，终止翻页")
+            break
         except Exception as e:
             print(f"第 {page} 页抓取失败: {e}，终止运行")
             break
@@ -102,28 +133,32 @@ def crawl_all():
         for topic in discussions:
             topic_id = topic["id"]
             if topic_id in progress:
-                continue  # 已抓取过
+                continue
 
-            attrs = topic["attributes"]
+            attrs = topic.get("attributes", {})
             title = attrs.get("title", "无标题")
             created = attrs.get("createdAt", "")[:10]
 
-            # 获取第一帖内容
-            try:
-                first_post_rel = topic["relationships"]["firstPost"]["data"]
-                post_id = first_post_rel["id"]
-                post_obj = included_posts.get(post_id)
-                if post_obj:
-                    content_html = post_obj["attributes"].get("contentHtml", "")
-                else:
-                    # 降级单独请求
-                    post_resp = fetch_with_retry(f"{BASE_URL}/api/posts/{post_id}")
-                    content_html = post_resp["data"]["attributes"].get("contentHtml", "")
-            except Exception as e:
-                print(f"  获取帖子内容失败 {topic_id}: {e}")
-                content_html = ""
+            content_text = ""
 
-            content_text = clean_html(content_html)
+            # 尝试通过 relationships 获取第一帖
+            if "relationships" in topic and "firstPost" in topic["relationships"]:
+                try:
+                    post_id = topic["relationships"]["firstPost"]["data"]["id"]
+                    post_obj = included_posts.get(post_id)
+                    if post_obj:
+                        content_html = post_obj["attributes"].get("contentHtml", "")
+                    else:
+                        content_html = fetch_post_content(post_id)
+                    content_text = clean_html(content_html)
+                except Exception as e:
+                    print(f"  通过 relationships 获取内容失败 {topic_id}: {e}")
+                    # 降级：尝试单独获取话题详情
+                    content_text = clean_html(fetch_discussion_detail(topic_id))
+            else:
+                # 根本没有 relationships 字段，单独获取话题详情
+                print(f"  话题 {topic_id} 缺少 relationships，尝试单独获取")
+                content_text = clean_html(fetch_discussion_detail(topic_id))
 
             doc = {
                 "id": topic_id,
@@ -136,18 +171,18 @@ def crawl_all():
             progress[topic_id] = True
             new_count += 1
 
-        # 每页抓取后保存进度和文档
+        # 每页结束后保存进度
         save_progress(progress)
         save_docs(list(doc_map.values()))
-
         print(f"  本页新增 {new_count} 个话题，累计 {len(doc_map)} 个")
         new_count = 0
         page += 1
-        time.sleep(random.uniform(1.0, 2.0))   # 随机延迟
+        # 增加随机延迟，降低限流风险
+        time.sleep(random.uniform(3.0, 5.0))
 
     print(f"✅ 全量抓取完成，共 {len(doc_map)} 个话题")
     save_docs(list(doc_map.values()))
-    # 清理进度文件（下次重新全量，若你希望增量可注释）
+    # 清理进度文件（下次重新全量，若需要增量可保留）
     if os.path.exists(PROGRESS_FILE):
         os.remove(PROGRESS_FILE)
 
