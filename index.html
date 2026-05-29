@@ -143,16 +143,40 @@
                 documents = await resp.json();
                 statsSpan.innerText = `📄 已索引 ${documents.length} 个话题，正在构建索引...`;
 
-                // 初始化 MiniSearch
+                // 初始化 MiniSearch 实例
                 miniSearch = new MiniSearch({
                     fields: ['title', 'content'],
                     storeFields: ['title', 'content', 'url', 'created', 'id'],
+                    // 默认搜索选项
                     searchOptions: {
-                        boost: { title: 3 },
-                        fuzzy: 0.2,
-                        prefix: true
+                        boost: { title: 3 },   // 标题权重是内容的3倍
+                        fuzzy: 0.2,            // 允许20%的拼写差异（模糊匹配）
+                        prefix: true,          // 支持前缀匹配
+                        // 根据发布时间提升权重
+                        boostDocument: (doc, term, storedFields) => {
+                            if (storedFields.created) {
+                                const postDate = new Date(storedFields.created);
+                                const now = new Date();
+                                const ageInDays = (now - postDate) / (1000 * 60 * 60 * 24);
+                                // 30天内的新帖子权重提升20%
+                                return ageInDays < 30 ? 1.2 : 1.0;
+                            }
+                            return 1.0;
+                        }
                     }
                 });
+                
+                // 准备文档，确保每个文档有唯一的 id
+                const docsForIndex = documents.map(doc => ({
+                    id: doc.id,
+                    title: doc.title,
+                    content: doc.content,
+                    url: doc.url,
+                    created: doc.created
+                }));
+                
+                // 将文档添加到索引
+                miniSearch.addAll(docsForIndex);
 
                 // 准备文档，保证每个文档有唯一的 id
                 const docsForIndex = documents.map(doc => ({
