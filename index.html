@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>智教联盟论坛全文搜索</title>
     <style>
         * { box-sizing: border-box; }
@@ -11,47 +11,54 @@
             max-width: 900px;
             margin: 2rem auto;
             padding: 0 1rem;
-            background: #f9fafc;
+            background: #f5f7fb;
         }
         .container {
             background: white;
-            border-radius: 24px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.05);
-            padding: 1.5rem;
+            border-radius: 28px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.05);
+            padding: 1.8rem;
         }
         h1 {
             font-size: 1.8rem;
-            margin-top: 0;
-            margin-bottom: 0.5rem;
+            margin: 0 0 0.25rem 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
         .sub {
-            color: #666;
-            margin-bottom: 1.5rem;
+            color: #4b5563;
+            margin-bottom: 1.8rem;
             border-left: 3px solid #26a03d;
             padding-left: 0.8rem;
+            font-size: 0.9rem;
         }
         #search-box {
             width: 100%;
-            padding: 0.8rem 1rem;
+            padding: 0.9rem 1.2rem;
             font-size: 1rem;
-            border: 1px solid #ddd;
-            border-radius: 40px;
+            border: 1px solid #e2e8f0;
+            border-radius: 48px;
             outline: none;
-            transition: 0.2s;
+            background: #ffffff;
+            transition: all 0.2s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
         }
         #search-box:focus {
             border-color: #26a03d;
-            box-shadow: 0 0 0 2px rgba(38,160,61,0.2);
+            box-shadow: 0 0 0 3px rgba(38,160,61,0.15);
         }
         .stats {
             margin-top: 1rem;
-            font-size: 0.85rem;
-            color: #555;
+            font-size: 0.8rem;
+            color: #4a5568;
+            border-bottom: 1px solid #edf2f7;
+            padding-bottom: 0.5rem;
         }
         .result {
             margin: 1.5rem 0;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #eee;
+            padding-bottom: 1.2rem;
+            border-bottom: 1px solid #eef2f6;
         }
         .result-title {
             font-size: 1.2rem;
@@ -59,173 +66,213 @@
         }
         .result-title a {
             text-decoration: none;
-            color: #1a0dab;
+            color: #1e3a8a;
         }
         .result-title a:hover {
             text-decoration: underline;
+            color: #1e40af;
         }
         .result-meta {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: #6c757d;
-            margin: 0.2rem 0;
+            margin: 0.25rem 0 0.5rem 0;
+            display: flex;
+            gap: 1rem;
         }
         .result-snippet {
-            color: #3c4043;
-            line-height: 1.4;
-            margin-top: 0.3rem;
+            color: #334155;
+            line-height: 1.45;
+            font-size: 0.9rem;
         }
         mark {
-            background: #ffeb3b;
-            border-radius: 4px;
+            background: #ffec9f;
+            border-radius: 6px;
             padding: 0 2px;
+            color: #2d2d2d;
         }
         .no-results {
             text-align: center;
-            color: #777;
-            margin-top: 2rem;
+            padding: 2rem;
+            color: #5b6e8c;
+            font-size: 0.95rem;
         }
         footer {
             text-align: center;
             margin-top: 2rem;
-            font-size: 0.75rem;
-            color: #aaa;
+            font-size: 0.7rem;
+            color: #94a3b8;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #3b82f6;
+        }
+        .error-msg {
+            background: #fee2e2;
+            border-left: 4px solid #dc2626;
+            padding: 0.8rem;
+            border-radius: 12px;
+            margin: 1rem 0;
+            font-size: 0.85rem;
         }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>🔍 智教联盟论坛</h1>
-    <div class="sub">全文搜索（由 GitHub Actions 每日更新）</div>
-    <input type="text" id="search-box" placeholder="输入关键词搜索，例如：Awesome Iwb 或 举报功能" autofocus>
-    <div class="stats" id="stats"></div>
+    <div class="sub">全文搜索 · 每日自动更新索引</div>
+    <input type="text" id="search-box" placeholder="输入关键词，例如：Awesome Iwb 或 举报 或 管控Class" autofocus>
+    <div class="stats" id="stats">📄 加载索引中...</div>
     <div id="results"></div>
-    <footer>数据来源：forum.smart-teach.cn · 索引每日更新</footer>
+    <footer>数据源 forum.smart-teach.cn | 索引由 GitHub Actions 每日生成</footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/lunr@2.3.9/lunr.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lunr-languages@1.14.0/lunr.stemmer.support.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lunr-languages@1.14.0/lunr.zh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/minisearch@6.3.0/dist/umd/index.min.js"></script>
 <script>
-    let idx = null;
-    let documents = [];
-    let searchInput = document.getElementById('search-box');
-    let resultsDiv = document.getElementById('results');
-    let statsSpan = document.getElementById('stats');
+    (function() {
+        let miniSearch = null;
+        let documents = [];
+        const searchInput = document.getElementById('search-box');
+        const resultsDiv = document.getElementById('results');
+        const statsSpan = document.getElementById('stats');
 
-    async function loadIndex() {
-        try {
-            const resp = await fetch('search-index.json');
-            if (!resp.ok) throw new Error('索引文件加载失败');
-            const docs = await resp.json();
-            documents = docs;
-            statsSpan.innerText = `📄 已索引 ${docs.length} 个话题`;
+        async function loadIndex() {
+            try {
+                const resp = await fetch('search-index.json');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                documents = await resp.json();
+                statsSpan.innerText = `📄 已索引 ${documents.length} 个话题，正在构建索引...`;
 
-            // 构建 Lunr 索引
-            idx = lunr(function() {
-                this.use(lunr.zh);
-                this.field('title', { boost: 10 });
-                this.field('content');
-                this.ref('id');
-                for (let doc of docs) {
-                    this.add(doc);
-                }
+                // 初始化 MiniSearch
+                miniSearch = new MiniSearch({
+                    fields: ['title', 'content'],
+                    storeFields: ['title', 'content', 'url', 'created', 'id'],
+                    searchOptions: {
+                        boost: { title: 3 },
+                        fuzzy: 0.2,
+                        prefix: true
+                    }
+                });
+
+                // 准备文档，保证每个文档有唯一的 id
+                const docsForIndex = documents.map(doc => ({
+                    id: doc.id,
+                    title: doc.title,
+                    content: doc.content,
+                    url: doc.url,
+                    created: doc.created
+                }));
+
+                miniSearch.addAll(docsForIndex);
+                statsSpan.innerText = `✅ 已索引 ${documents.length} 个话题，输入关键词开始搜索`;
+                console.log('MiniSearch 索引构建完成');
+            } catch (err) {
+                console.error(err);
+                statsSpan.innerText = '❌ 索引加载失败，请刷新页面重试';
+                resultsDiv.innerHTML = `<div class="error-msg">⚠️ 无法加载 search-index.json，请确认网络或稍后再试。</div>`;
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
             });
-            console.log('索引构建完成');
-        } catch (err) {
-            console.error(err);
-            statsSpan.innerText = '❌ 索引加载失败，请稍后刷新重试';
         }
-    }
 
-    function escapeHtml(str) {
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
-    }
-
-    function highlight(text, query) {
-        if (!query) return escapeHtml(text);
-        // 简单分词高亮，保留原始大小写匹配
-        let words = query.trim().split(/\s+/);
-        let escapedText = escapeHtml(text);
-        for (let w of words) {
-            if (w.length < 2) continue;
-            let regex = new RegExp(`(${escapeRegex(w)})`, 'gi');
-            escapedText = escapedText.replace(regex, '<mark>$1</mark>');
+        function highlight(text, queryTerms) {
+            if (!text || !queryTerms.length) return escapeHtml(text);
+            let result = escapeHtml(text);
+            // 按词高亮，忽略大小写（只匹配原始文本，因为英文大小写不影响阅读）
+            const uniqueTerms = [...new Set(queryTerms.map(t => t.toLowerCase()))];
+            for (let term of uniqueTerms) {
+                if (term.length < 2) continue;
+                const regex = new RegExp(`(${escapeRegex(term)})`, 'gi');
+                result = result.replace(regex, '<mark>$1</mark>');
+            }
+            return result;
         }
-        return escapedText;
-    }
 
-    function escapeRegex(str) {
-        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
+        function escapeRegex(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
 
-    function getSnippet(content, query, len = 200) {
-        if (!query) return content.slice(0, len) + (content.length > len ? '…' : '');
-        let lowerContent = content.toLowerCase();
-        let words = query.trim().toLowerCase().split(/\s+/);
-        let bestIndex = -1;
-        for (let w of words) {
-            let idx = lowerContent.indexOf(w);
-            if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) bestIndex = idx;
+        function getSnippet(content, queryTerms, maxLen = 220) {
+            if (!content) return '';
+            const lowerContent = content.toLowerCase();
+            let bestIndex = -1;
+            for (let term of queryTerms) {
+                const idx = lowerContent.indexOf(term.toLowerCase());
+                if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
+                    bestIndex = idx;
+                }
+            }
+            if (bestIndex === -1) {
+                return content.slice(0, maxLen) + (content.length > maxLen ? '…' : '');
+            }
+            let start = Math.max(0, bestIndex - 60);
+            let end = Math.min(content.length, start + maxLen);
+            let snippet = content.slice(start, end);
+            if (start > 0) snippet = '…' + snippet;
+            if (end < content.length) snippet = snippet + '…';
+            return snippet;
         }
-        if (bestIndex === -1) {
-            return content.slice(0, len) + (content.length > len ? '…' : '');
-        }
-        let start = Math.max(0, bestIndex - 60);
-        let end = Math.min(content.length, start + len);
-        let snippet = content.slice(start, end);
-        if (start > 0) snippet = '…' + snippet;
-        if (end < content.length) snippet = snippet + '…';
-        return snippet;
-    }
 
-    function renderResults(query) {
-        if (!idx || !query.trim()) {
-            resultsDiv.innerHTML = '';
-            return;
-        }
-        try {
-            const results = idx.search(query);
-            if (results.length === 0) {
-                resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词</div>';
+        function renderResults(query) {
+            if (!miniSearch || !query.trim()) {
+                resultsDiv.innerHTML = '';
+                if (query.trim() === '') statsSpan.innerText = `📄 已索引 ${documents.length} 个话题`;
                 return;
             }
-            let html = '';
-            for (let i = 0; i < Math.min(results.length, 100); i++) {
-                const doc = documents.find(d => d.id === results[i].ref);
-                if (!doc) continue;
-                const titleHighlight = highlight(doc.title, query);
-                const snippetRaw = getSnippet(doc.content, query);
-                const snippetHighlight = highlight(snippetRaw, query);
-                html += `
-                    <div class="result">
-                        <div class="result-title"><a href="${doc.url}" target="_blank" rel="noopener noreferrer">${titleHighlight}</a></div>
-                        <div class="result-meta">📅 ${doc.created || '未知日期'} · 🔗 ${doc.url}</div>
-                        <div class="result-snippet">${snippetHighlight}</div>
-                    </div>
-                `;
+
+            try {
+                const rawResults = miniSearch.search(query, { prefix: true, fuzzy: 0.2 });
+                if (rawResults.length === 0) {
+                    resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词</div>';
+                    statsSpan.innerText = `📄 已索引 ${documents.length} 个话题 · 无匹配结果`;
+                    return;
+                }
+
+                // 提取查询词用于高亮（分词简单按空格）
+                const queryTerms = query.trim().split(/\s+/).filter(t => t.length > 1);
+                let html = '';
+                for (let i = 0; i < Math.min(rawResults.length, 100); i++) {
+                    const doc = rawResults[i];
+                    const titleHighlight = highlight(doc.title, queryTerms);
+                    const snippetRaw = getSnippet(doc.content, queryTerms);
+                    const snippetHighlight = highlight(snippetRaw, queryTerms);
+                    html += `
+                        <div class="result">
+                            <div class="result-title"><a href="${doc.url}" target="_blank" rel="noopener">${titleHighlight}</a></div>
+                            <div class="result-meta">
+                                <span>📅 ${doc.created || '未知日期'}</span>
+                                <span>🔗 <a href="${doc.url}" target="_blank" style="color:#2c6e9c;">直达帖子</a></span>
+                            </div>
+                            <div class="result-snippet">${snippetHighlight}</div>
+                        </div>
+                    `;
+                }
+                resultsDiv.innerHTML = html;
+                statsSpan.innerText = `📄 共 ${documents.length} 个话题 · 找到 ${rawResults.length} 条结果`;
+            } catch (err) {
+                console.error(err);
+                resultsDiv.innerHTML = '<div class="no-results">搜索出错，请重试</div>';
             }
-            resultsDiv.innerHTML = html;
-            statsSpan.innerText = `📄 已索引 ${documents.length} 个话题 · 找到 ${results.length} 条结果`;
-        } catch (err) {
-            console.error(err);
-            resultsDiv.innerHTML = '<div class="no-results">搜索出错，请重试</div>';
         }
-    }
 
-    let debounceTimer;
-    searchInput.addEventListener('input', function(e) {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            renderResults(e.target.value.trim());
-        }, 200);
-    });
+        let debounceTimer;
+        searchInput.addEventListener('input', function(e) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                renderResults(e.target.value.trim());
+            }, 200);
+        });
 
-    loadIndex();
+        loadIndex();
+    })();
 </script>
 </body>
 </html>
