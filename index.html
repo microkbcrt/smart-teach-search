@@ -121,7 +121,7 @@
 <div class="container">
     <h1>🔍 智教联盟论坛</h1>
     <div class="sub">全文搜索 · 每日自动更新索引</div>
-    <input type="text" id="search-box" placeholder="输入关键词，例如：Awesome Iwb 或 举报 或 管控Class" autofocus>
+    <input type="text" id="search-box" placeholder="输入关键词，例如：自动关机 或 Awesome Iwb" autofocus>
     <div class="stats" id="stats">📄 加载索引中...</div>
     <div id="results"></div>
     <footer>数据源 forum.smart-teach.cn | 索引由 GitHub Actions 每日生成</footer>
@@ -143,42 +143,29 @@
                 documents = await resp.json();
                 statsSpan.innerText = `📄 已索引 ${documents.length} 个话题，正在构建索引...`;
 
-                // 初始化 MiniSearch 实例
+                // 初始化 MiniSearch，优化中文匹配
                 miniSearch = new MiniSearch({
                     fields: ['title', 'content'],
                     storeFields: ['title', 'content', 'url', 'created', 'id'],
-                    // 默认搜索选项
                     searchOptions: {
-                        boost: { title: 3 },   // 标题权重是内容的3倍
-                        fuzzy: 0.2,            // 允许20%的拼写差异（模糊匹配）
-                        prefix: true,          // 支持前缀匹配
-                        // 根据发布时间提升权重
+                        boost: { title: 3 },
+                        fuzzy: 0.2,          // 模糊匹配，允许20%拼写差异
+                        prefix: true,        // 前缀匹配
                         boostDocument: (doc, term, storedFields) => {
+                            // 根据发布日期提升新帖权重
                             if (storedFields.created) {
                                 const postDate = new Date(storedFields.created);
                                 const now = new Date();
                                 const ageInDays = (now - postDate) / (1000 * 60 * 60 * 24);
-                                // 30天内的新帖子权重提升20%
+                                // 30天内新帖权重提升20%
                                 return ageInDays < 30 ? 1.2 : 1.0;
                             }
                             return 1.0;
                         }
                     }
                 });
-                
-                // 准备文档，确保每个文档有唯一的 id
-                const docsForIndex = documents.map(doc => ({
-                    id: doc.id,
-                    title: doc.title,
-                    content: doc.content,
-                    url: doc.url,
-                    created: doc.created
-                }));
-                
-                // 将文档添加到索引
-                miniSearch.addAll(docsForIndex);
 
-                // 准备文档，保证每个文档有唯一的 id
+                // 准备文档数据
                 const docsForIndex = documents.map(doc => ({
                     id: doc.id,
                     title: doc.title,
@@ -189,7 +176,7 @@
 
                 miniSearch.addAll(docsForIndex);
                 statsSpan.innerText = `✅ 已索引 ${documents.length} 个话题，输入关键词开始搜索`;
-                console.log('MiniSearch 索引构建完成');
+                console.log('MiniSearch 索引构建完成，配置：fuzzy + prefix + 新帖提权');
             } catch (err) {
                 console.error(err);
                 statsSpan.innerText = '❌ 索引加载失败，请刷新页面重试';
@@ -210,7 +197,6 @@
         function highlight(text, queryTerms) {
             if (!text || !queryTerms.length) return escapeHtml(text);
             let result = escapeHtml(text);
-            // 按词高亮，忽略大小写（只匹配原始文本，因为英文大小写不影响阅读）
             const uniqueTerms = [...new Set(queryTerms.map(t => t.toLowerCase()))];
             for (let term of uniqueTerms) {
                 if (term.length < 2) continue;
@@ -253,14 +239,14 @@
             }
 
             try {
-                const rawResults = miniSearch.search(query, { prefix: true, fuzzy: 0.2 });
+                // 执行搜索，使用已配置的 searchOptions（fuzzy, prefix, boostDocument 会自动生效）
+                const rawResults = miniSearch.search(query);
                 if (rawResults.length === 0) {
-                    resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词</div>';
+                    resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词（可尝试更短的词）</div>';
                     statsSpan.innerText = `📄 已索引 ${documents.length} 个话题 · 无匹配结果`;
                     return;
                 }
 
-                // 提取查询词用于高亮（分词简单按空格）
                 const queryTerms = query.trim().split(/\s+/).filter(t => t.length > 1);
                 let html = '';
                 for (let i = 0; i < Math.min(rawResults.length, 100); i++) {
