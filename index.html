@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>智教联盟论坛全文搜索</title>
+    <title>智教联盟论坛全文搜索（精准匹配）</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -102,11 +102,6 @@
             font-size: 0.7rem;
             color: #94a3b8;
         }
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            color: #3b82f6;
-        }
         .error-msg {
             background: #fee2e2;
             border-left: 4px solid #dc2626;
@@ -120,17 +115,15 @@
 <body>
 <div class="container">
     <h1>🔍 智教联盟论坛</h1>
-    <div class="sub">全文搜索 · 每日自动更新索引</div>
-    <input type="text" id="search-box" placeholder="输入关键词，例如：自动关机 或 Awesome Iwb" autofocus>
+    <div class="sub">全文搜索 · 直接匹配标题和内容 · 每日更新</div>
+    <input type="text" id="search-box" placeholder="输入关键词，例如：自动关机" autofocus>
     <div class="stats" id="stats">📄 加载索引中...</div>
     <div id="results"></div>
-    <footer>数据源 forum.smart-teach.cn | 索引由 GitHub Actions 每日生成</footer>
+    <footer>数据源 forum.smart-teach.cn | 索引由 GitHub Actions 每日生成 | 搜索方式：子串精确匹配</footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/minisearch@6.3.0/dist/umd/index.min.js"></script>
 <script>
     (function() {
-        let miniSearch = null;
         let documents = [];
         const searchInput = document.getElementById('search-box');
         const resultsDiv = document.getElementById('results');
@@ -141,42 +134,8 @@
                 const resp = await fetch('search-index.json');
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 documents = await resp.json();
-                statsSpan.innerText = `📄 已索引 ${documents.length} 个话题，正在构建索引...`;
-
-                // 初始化 MiniSearch，优化中文匹配
-                miniSearch = new MiniSearch({
-                    fields: ['title', 'content'],
-                    storeFields: ['title', 'content', 'url', 'created', 'id'],
-                    searchOptions: {
-                        boost: { title: 3 },
-                        fuzzy: 0.2,          // 模糊匹配，允许20%拼写差异
-                        prefix: true,        // 前缀匹配
-                        boostDocument: (doc, term, storedFields) => {
-                            // 根据发布日期提升新帖权重
-                            if (storedFields.created) {
-                                const postDate = new Date(storedFields.created);
-                                const now = new Date();
-                                const ageInDays = (now - postDate) / (1000 * 60 * 60 * 24);
-                                // 30天内新帖权重提升20%
-                                return ageInDays < 30 ? 1.2 : 1.0;
-                            }
-                            return 1.0;
-                        }
-                    }
-                });
-
-                // 准备文档数据
-                const docsForIndex = documents.map(doc => ({
-                    id: doc.id,
-                    title: doc.title,
-                    content: doc.content,
-                    url: doc.url,
-                    created: doc.created
-                }));
-
-                miniSearch.addAll(docsForIndex);
-                statsSpan.innerText = `✅ 已索引 ${documents.length} 个话题，输入关键词开始搜索`;
-                console.log('MiniSearch 索引构建完成，配置：fuzzy + prefix + 新帖提权');
+                statsSpan.innerText = `✅ 已加载 ${documents.length} 个话题，输入关键词进行精确匹配搜索`;
+                console.log(`索引加载完成，共 ${documents.length} 条记录`);
             } catch (err) {
                 console.error(err);
                 statsSpan.innerText = '❌ 索引加载失败，请刷新页面重试';
@@ -194,94 +153,116 @@
             });
         }
 
-        function highlight(text, queryTerms) {
-            if (!text || !queryTerms.length) return escapeHtml(text);
-            let result = escapeHtml(text);
-            const uniqueTerms = [...new Set(queryTerms.map(t => t.toLowerCase()))];
-            for (let term of uniqueTerms) {
-                if (term.length < 2) continue;
-                const regex = new RegExp(`(${escapeRegex(term)})`, 'gi');
-                result = result.replace(regex, '<mark>$1</mark>');
-            }
-            return result;
+        function highlight(text, keyword) {
+            if (!text || !keyword) return escapeHtml(text);
+            const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`(${escapedKeyword})`, 'gi');
+            return escapeHtml(text).replace(regex, '<mark>$1</mark>');
         }
 
-        function escapeRegex(str) {
-            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
-
-        function getSnippet(content, queryTerms, maxLen = 220) {
-            if (!content) return '';
-            const lowerContent = content.toLowerCase();
-            let bestIndex = -1;
-            for (let term of queryTerms) {
-                const idx = lowerContent.indexOf(term.toLowerCase());
-                if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
-                    bestIndex = idx;
-                }
+        function getSnippet(text, keyword, maxLen = 220) {
+            if (!text) return '';
+            const lowerText = text.toLowerCase();
+            const lowerKeyword = keyword.toLowerCase();
+            const idx = lowerText.indexOf(lowerKeyword);
+            if (idx === -1) {
+                return text.slice(0, maxLen) + (text.length > maxLen ? '…' : '');
             }
-            if (bestIndex === -1) {
-                return content.slice(0, maxLen) + (content.length > maxLen ? '…' : '');
-            }
-            let start = Math.max(0, bestIndex - 60);
-            let end = Math.min(content.length, start + maxLen);
-            let snippet = content.slice(start, end);
+            let start = Math.max(0, idx - 60);
+            let end = Math.min(text.length, start + maxLen);
+            let snippet = text.slice(start, end);
             if (start > 0) snippet = '…' + snippet;
-            if (end < content.length) snippet = snippet + '…';
+            if (end < text.length) snippet = snippet + '…';
             return snippet;
         }
 
-        function renderResults(query) {
-            if (!miniSearch || !query.trim()) {
+        // 计算匹配得分：标题匹配权重高，内容匹配权重低，且关键词出现次数越多越好
+        function calculateScore(doc, keyword) {
+            const lowerKeyword = keyword.toLowerCase();
+            const titleLower = doc.title.toLowerCase();
+            const contentLower = doc.content.toLowerCase();
+            let score = 0;
+            // 标题匹配
+            if (titleLower.includes(lowerKeyword)) {
+                score += 100;
+                // 标题中出现次数越多越好
+                const titleCount = (titleLower.match(new RegExp(lowerKeyword, 'g')) || []).length;
+                score += titleCount * 10;
+            }
+            // 内容匹配
+            if (contentLower.includes(lowerKeyword)) {
+                score += 10;
+                const contentCount = (contentLower.match(new RegExp(lowerKeyword, 'g')) || []).length;
+                score += contentCount;
+            }
+            // 日期越新加分（可选，避免完全依赖关键词）
+            if (doc.created) {
+                const postDate = new Date(doc.created);
+                const now = new Date();
+                const ageInDays = (now - postDate) / (1000 * 60 * 60 * 24);
+                if (ageInDays < 30) score += 5;
+                else if (ageInDays < 90) score += 2;
+            }
+            return score;
+        }
+
+        function search(keyword) {
+            if (!keyword.trim()) return [];
+            const lowerKeyword = keyword.trim().toLowerCase();
+            // 精确匹配：标题或内容包含关键词（不区分大小写）
+            const matched = documents.filter(doc => 
+                doc.title.toLowerCase().includes(lowerKeyword) || 
+                doc.content.toLowerCase().includes(lowerKeyword)
+            );
+            // 按得分排序
+            matched.sort((a, b) => calculateScore(b, lowerKeyword) - calculateScore(a, lowerKeyword));
+            return matched;
+        }
+
+        function renderResults() {
+            const keyword = searchInput.value.trim();
+            if (!keyword) {
                 resultsDiv.innerHTML = '';
-                if (query.trim() === '') statsSpan.innerText = `📄 已索引 ${documents.length} 个话题`;
+                statsSpan.innerText = `📄 共 ${documents.length} 个话题，输入关键词开始搜索`;
                 return;
             }
 
-            try {
-                // 执行搜索，使用已配置的 searchOptions（fuzzy, prefix, boostDocument 会自动生效）
-                const rawResults = miniSearch.search(query);
-                if (rawResults.length === 0) {
-                    resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词（可尝试更短的词）</div>';
-                    statsSpan.innerText = `📄 已索引 ${documents.length} 个话题 · 无匹配结果`;
-                    return;
-                }
-
-                const queryTerms = query.trim().split(/\s+/).filter(t => t.length > 1);
-                let html = '';
-                for (let i = 0; i < Math.min(rawResults.length, 100); i++) {
-                    const doc = rawResults[i];
-                    const titleHighlight = highlight(doc.title, queryTerms);
-                    const snippetRaw = getSnippet(doc.content, queryTerms);
-                    const snippetHighlight = highlight(snippetRaw, queryTerms);
-                    html += `
-                        <div class="result">
-                            <div class="result-title"><a href="${doc.url}" target="_blank" rel="noopener">${titleHighlight}</a></div>
-                            <div class="result-meta">
-                                <span>📅 ${doc.created || '未知日期'}</span>
-                                <span>🔗 <a href="${doc.url}" target="_blank" style="color:#2c6e9c;">直达帖子</a></span>
-                            </div>
-                            <div class="result-snippet">${snippetHighlight}</div>
-                        </div>
-                    `;
-                }
-                resultsDiv.innerHTML = html;
-                statsSpan.innerText = `📄 共 ${documents.length} 个话题 · 找到 ${rawResults.length} 条结果`;
-            } catch (err) {
-                console.error(err);
-                resultsDiv.innerHTML = '<div class="no-results">搜索出错，请重试</div>';
+            const matched = search(keyword);
+            if (matched.length === 0) {
+                resultsDiv.innerHTML = '<div class="no-results">😔 没有找到包含该关键词的帖子，尝试其他词</div>';
+                statsSpan.innerText = `📄 共 ${documents.length} 个话题 · 无匹配结果`;
+                return;
             }
+
+            let html = '';
+            for (let doc of matched.slice(0, 100)) {
+                const titleHighlight = highlight(doc.title, keyword);
+                const snippetRaw = getSnippet(doc.content, keyword);
+                const snippetHighlight = highlight(snippetRaw, keyword);
+                html += `
+                    <div class="result">
+                        <div class="result-title"><a href="${doc.url}" target="_blank" rel="noopener">${titleHighlight}</a></div>
+                        <div class="result-meta">
+                            <span>📅 ${doc.created || '未知日期'}</span>
+                            <span>🔗 <a href="${doc.url}" target="_blank" style="color:#2c6e9c;">直达帖子</a></span>
+                        </div>
+                        <div class="result-snippet">${snippetHighlight}</div>
+                    </div>
+                `;
+            }
+            resultsDiv.innerHTML = html;
+            statsSpan.innerText = `📄 共 ${documents.length} 个话题 · 找到 ${matched.length} 条结果`;
         }
 
         let debounceTimer;
-        searchInput.addEventListener('input', function(e) {
+        searchInput.addEventListener('input', function() {
             clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                renderResults(e.target.value.trim());
-            }, 200);
+            debounceTimer = setTimeout(renderResults, 150);
         });
 
-        loadIndex();
+        loadIndex().then(() => {
+            // 初始无搜索词，不显示结果
+        });
     })();
 </script>
 </body>
