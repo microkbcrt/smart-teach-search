@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智教联盟论坛全文搜索</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #f9fafc;
+        }
+        .container {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+            padding: 1.5rem;
+        }
+        h1 {
+            font-size: 1.8rem;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+        }
+        .sub {
+            color: #666;
+            margin-bottom: 1.5rem;
+            border-left: 3px solid #26a03d;
+            padding-left: 0.8rem;
+        }
+        #search-box {
+            width: 100%;
+            padding: 0.8rem 1rem;
+            font-size: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 40px;
+            outline: none;
+            transition: 0.2s;
+        }
+        #search-box:focus {
+            border-color: #26a03d;
+            box-shadow: 0 0 0 2px rgba(38,160,61,0.2);
+        }
+        .stats {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            color: #555;
+        }
+        .result {
+            margin: 1.5rem 0;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #eee;
+        }
+        .result-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        .result-title a {
+            text-decoration: none;
+            color: #1a0dab;
+        }
+        .result-title a:hover {
+            text-decoration: underline;
+        }
+        .result-meta {
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin: 0.2rem 0;
+        }
+        .result-snippet {
+            color: #3c4043;
+            line-height: 1.4;
+            margin-top: 0.3rem;
+        }
+        mark {
+            background: #ffeb3b;
+            border-radius: 4px;
+            padding: 0 2px;
+        }
+        .no-results {
+            text-align: center;
+            color: #777;
+            margin-top: 2rem;
+        }
+        footer {
+            text-align: center;
+            margin-top: 2rem;
+            font-size: 0.75rem;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🔍 智教联盟论坛</h1>
+    <div class="sub">全文搜索（由 GitHub Actions 每日更新）</div>
+    <input type="text" id="search-box" placeholder="输入关键词搜索，例如：Awesome Iwb 或 举报功能" autofocus>
+    <div class="stats" id="stats"></div>
+    <div id="results"></div>
+    <footer>数据来源：forum.smart-teach.cn · 索引每日更新</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lunr-languages@1.14.0/lunr.stemmer.support.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lunr-languages@1.14.0/lunr.zh.js"></script>
+<script>
+    let idx = null;
+    let documents = [];
+    let searchInput = document.getElementById('search-box');
+    let resultsDiv = document.getElementById('results');
+    let statsSpan = document.getElementById('stats');
+
+    async function loadIndex() {
+        try {
+            const resp = await fetch('search-index.json');
+            if (!resp.ok) throw new Error('索引文件加载失败');
+            const docs = await resp.json();
+            documents = docs;
+            statsSpan.innerText = `📄 已索引 ${docs.length} 个话题`;
+
+            // 构建 Lunr 索引
+            idx = lunr(function() {
+                this.use(lunr.zh);
+                this.field('title', { boost: 10 });
+                this.field('content');
+                this.ref('id');
+                for (let doc of docs) {
+                    this.add(doc);
+                }
+            });
+            console.log('索引构建完成');
+        } catch (err) {
+            console.error(err);
+            statsSpan.innerText = '❌ 索引加载失败，请稍后刷新重试';
+        }
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/[&<>]/g, function(m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
+    }
+
+    function highlight(text, query) {
+        if (!query) return escapeHtml(text);
+        // 简单分词高亮，保留原始大小写匹配
+        let words = query.trim().split(/\s+/);
+        let escapedText = escapeHtml(text);
+        for (let w of words) {
+            if (w.length < 2) continue;
+            let regex = new RegExp(`(${escapeRegex(w)})`, 'gi');
+            escapedText = escapedText.replace(regex, '<mark>$1</mark>');
+        }
+        return escapedText;
+    }
+
+    function escapeRegex(str) {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function getSnippet(content, query, len = 200) {
+        if (!query) return content.slice(0, len) + (content.length > len ? '…' : '');
+        let lowerContent = content.toLowerCase();
+        let words = query.trim().toLowerCase().split(/\s+/);
+        let bestIndex = -1;
+        for (let w of words) {
+            let idx = lowerContent.indexOf(w);
+            if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) bestIndex = idx;
+        }
+        if (bestIndex === -1) {
+            return content.slice(0, len) + (content.length > len ? '…' : '');
+        }
+        let start = Math.max(0, bestIndex - 60);
+        let end = Math.min(content.length, start + len);
+        let snippet = content.slice(start, end);
+        if (start > 0) snippet = '…' + snippet;
+        if (end < content.length) snippet = snippet + '…';
+        return snippet;
+    }
+
+    function renderResults(query) {
+        if (!idx || !query.trim()) {
+            resultsDiv.innerHTML = '';
+            return;
+        }
+        try {
+            const results = idx.search(query);
+            if (results.length === 0) {
+                resultsDiv.innerHTML = '<div class="no-results">😔 没有找到相关结果，尝试其他关键词</div>';
+                return;
+            }
+            let html = '';
+            for (let i = 0; i < Math.min(results.length, 100); i++) {
+                const doc = documents.find(d => d.id === results[i].ref);
+                if (!doc) continue;
+                const titleHighlight = highlight(doc.title, query);
+                const snippetRaw = getSnippet(doc.content, query);
+                const snippetHighlight = highlight(snippetRaw, query);
+                html += `
+                    <div class="result">
+                        <div class="result-title"><a href="${doc.url}" target="_blank" rel="noopener noreferrer">${titleHighlight}</a></div>
+                        <div class="result-meta">📅 ${doc.created || '未知日期'} · 🔗 ${doc.url}</div>
+                        <div class="result-snippet">${snippetHighlight}</div>
+                    </div>
+                `;
+            }
+            resultsDiv.innerHTML = html;
+            statsSpan.innerText = `📄 已索引 ${documents.length} 个话题 · 找到 ${results.length} 条结果`;
+        } catch (err) {
+            console.error(err);
+            resultsDiv.innerHTML = '<div class="no-results">搜索出错，请重试</div>';
+        }
+    }
+
+    let debounceTimer;
+    searchInput.addEventListener('input', function(e) {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            renderResults(e.target.value.trim());
+        }, 200);
+    });
+
+    loadIndex();
+</script>
+</body>
+</html>
